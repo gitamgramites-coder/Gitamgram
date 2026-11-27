@@ -25,6 +25,9 @@
     return p.role === "super_admin" ? "super_admin" : p.role === "moderator" ? "admin" : "student";
   }
   function toUser(p, email) {
+    // Staff sign in as the OFFICIAL account: the app supplies name, @username, logo and bio itself,
+    // so return only account facts here and never override that identity.
+    if (roleOf(p) !== "student") return { email: email, status: p.status, verified: true, badge: true, isOfficial: true };
     return {
       id: p.id, name: p.display_name, un: p.username, email: email,
       campus: (p.campuses && p.campuses.slug) || "hyd", dept: p.department || "", year: p.academic_year || "",

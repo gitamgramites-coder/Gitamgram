@@ -7,6 +7,25 @@
   var URL = "https://xkumevmzkabixxymyrxz.supabase.co";
   var KEY = "sb_publishable_EmJhbsy5SOTpuYlJ7rnBjQ_V3O88Ngv";
   if (!window.supabase) { console.warn("GITAMGRAM: supabase-js did not load; sign-in is unavailable."); return; }
+  /* Coming back from an email link: show a friendly message instead of a raw error in the URL.
+     Read the hash BEFORE supabase-js consumes it. */
+  var flash = null, flashIsError = false;
+  (function () {
+    var h = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+    if (h.get("error_description")) { flash = "That email link expired or was already used. If you already confirmed your email, just log in."; flashIsError = true; }
+    else if (h.get("type") === "signup" && h.get("access_token")) flash = "Email confirmed. Please log in.";
+    if (flash) history.replaceState(null, "", location.pathname + location.search);
+  })();
+  window.addEventListener("load", function () {
+    if (!flash) return;
+    setTimeout(function () {
+      try {
+        if (typeof S !== "undefined") { S.screen = "login"; S.reg = S.reg || {}; S.reg.err = flashIsError ? flash : ""; }
+        if (!flashIsError && typeof toast === "function") toast(flash); else if (typeof render === "function") render();
+      } catch (e) {}
+    }, 400);
+  });
+
   var sb = window.supabase.createClient(URL, KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   window.GITAMGRAM_SB = sb; // use this client for posts, stories, messages... (RLS protects every table)
 
@@ -25,6 +44,9 @@
     return p.role === "super_admin" ? "super_admin" : p.role === "moderator" ? "admin" : "student";
   }
   function toUser(p, email) {
+    // Staff sign in as the OFFICIAL account: the app supplies name, @username, logo and bio itself,
+    // so return only account facts here and never override that identity.
+    if (roleOf(p) !== "student") return { email: email, status: p.status, verified: true, badge: true, isOfficial: true };
     return {
       id: p.id, name: p.display_name, un: p.username, email: email,
       campus: (p.campuses && p.campuses.slug) || "hyd", dept: p.department || "", year: p.academic_year || "",
@@ -79,7 +101,23 @@
     forgotPassword: async function (email) {
       await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
     },
-    logout: async function () { await sb.auth.signOut(); }
+    logout: async function () { await sb.auth.signOut(); },
+    /* Posts visible to the signed-in user (row-level security decides which). Read-only for now. */
+    loadFeed: async function () {
+      var r = await sb.from("posts")
+        .select("id,caption,visibility,created_at,campuses(slug),author:profiles(id,username,display_name,department,academic_year,bio,is_official,has_badge,campuses(slug))")
+        .eq("archived", false).eq("is_reel", false).order("created_at", { ascending: false }).limit(50);
+      if (r.error) throw new Error(msg(r.error));
+      return (r.data || []).map(function (p) {
+        var a = p.author || {};
+        return {
+          id: p.id, caption: p.caption, visibility: p.visibility, created_at: p.created_at,
+          isOfficialPost: !!a.is_official, campus: (p.campuses && p.campuses.slug) || "hyd",
+          author: { id: a.id, name: a.display_name, un: a.username, dept: a.department, year: a.academic_year, bio: a.bio,
+                    badge: a.has_badge, isOfficial: !!a.is_official, campus: (a.campuses && a.campuses.slug) || "hyd" }
+        };
+      });
+    }
   };
 
   /* Password-reset link lands here: show a small "choose a new password" dialog. */

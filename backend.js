@@ -102,6 +102,35 @@
       await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
     },
     logout: async function () { await sb.auth.signOut(); },
+    /* ---- Admin (staff only: row-level security and the database functions enforce this) ---- */
+    adminLoad: async function () {
+      var q = await Promise.all([
+        sb.from("verification_requests").select("id,user_id,student_id,status,created_at").order("created_at", { ascending: false }),
+        sb.from("student_records").select("user_id,phone,email,student_id,campuses(slug)"),
+        sb.from("profiles").select("id,username,display_name,department,academic_year,avatar_url,role,status,has_badge,is_official,campuses(slug)")
+      ]);
+      for (var i = 0; i < q.length; i++) if (q[i].error) throw new Error(msg(q[i].error));
+      return { requests: q[0].data || [], records: q[1].data || [], profiles: q[2].data || [] };
+    },
+    adminReview: async function (requestId, approve, note) {
+      var r = await sb.rpc("review_verification", { req: requestId, approve: !!approve, reviewer_note: note || null });
+      if (r.error) throw new Error(msg(r.error));
+    },
+    adminSetBadge: async function (userId, on) {
+      var r = await sb.from("profiles").update({ has_badge: !!on }).eq("id", userId);
+      if (r.error) throw new Error(msg(r.error));
+    },
+    adminSetSuspended: async function (userId, on) {
+      var r = await sb.from("profiles").update({ status: on ? "suspended" : "verified" }).eq("id", userId);
+      if (r.error) throw new Error(msg(r.error));
+    },
+    /* A waiting student re-checks their own status without logging in again. */
+    myStatus: async function () {
+      var u = (await sb.auth.getUser()).data.user;
+      if (!u) throw new Error("Please sign in again.");
+      var p = await loadProfile(u.id);
+      return { user: toUser(p, u.email), role: roleOf(p) };
+    },
     /* Posts visible to the signed-in user (row-level security decides which). Read-only for now. */
     loadFeed: async function () {
       var r = await sb.from("posts")

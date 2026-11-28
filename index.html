@@ -391,6 +391,16 @@ function loadRemoteFeed(){if(!BE().loadFeed)return;BE().loadFeed().then(rows=>{
   const mins=Math.max(1,Math.round((Date.now()-new Date(r.created_at).getTime())/6e4));
   const post=mkPost(nid++,who,cap,tags,0,mins,r.isOfficialPost?"all":(r.campus||"hyd"),r.visibility||"campus");post.db=true;post.dbId=r.id;S.posts.push(post)});
  render()}).catch(()=>{})}
+function ensureDbUser(p){S.dbUsers=S.dbUsers||{};let id=S.dbUsers[p.id];let u=id&&U.find(x=>x.id===id);
+ if(!u){id=S.dbUsers[p.id]=1000+Object.keys(S.dbUsers).length;u={id};U.push(u)}
+ Object.assign(u,{uuid:p.id,name:p.name,un:p.un,email:p.email||u.email||"",campus:p.campus||"hyd",dept:p.dept||"",year:p.year||"",role:p.role||"student",verified:p.status==="verified",badge:!!p.badge,suspended:p.status==="suspended"});return u}
+function loadAdminData(){if(!BE().adminLoad)return;BE().adminLoad().then(d=>{
+ const rec={},prof={};(d.records||[]).forEach(r=>rec[r.user_id]=r);(d.profiles||[]).forEach(p=>prof[p.id]=p);
+ const slug=x=>(x&&x.campuses&&x.campuses.slug)||"hyd";
+ S.verifQ=(d.requests||[]).map((v,i)=>{const p=prof[v.user_id]||{},r=rec[v.user_id]||{};return{id:5000+i,dbId:v.id,uid:v.user_id,name:p.display_name||"(unknown)",email:r.email||"",sid:v.student_id,campus:slug(p),dept:p.department||"",status:v.status==="verified"?"approved":v.status,badgeCat:""}});
+ (d.profiles||[]).filter(p=>!p.is_official&&(p.status==="verified"||p.status==="suspended")).forEach(p=>ensureDbUser({id:p.id,name:p.display_name,un:p.username,email:(rec[p.id]||{}).email,campus:slug(p),dept:p.department,year:p.academic_year,role:p.role,status:p.status,badge:p.has_badge}));
+ S.students={blr:[],hyd:[],vsp:[]};(d.records||[]).forEach(r=>{const p=prof[r.user_id]||{},c=slug(r);(S.students[c]=S.students[c]||[]).push({name:p.display_name||"",phone:r.phone||"",email:r.email||"",sid:r.student_id,photo:p.avatar_url||null,dept:p.department||"",year:p.academic_year||""})});
+ render()}).catch(e=>{toast((e&&e.message)||"Could not load users")})}
 function audit(a){S.audit.unshift({t:"Just now",who:S.me.role==="super_admin"?"Super Admin":"Moderator",a})}
 const collabStatus=(x,id)=>(x.collab||[]).includes(id)?"accepted":(x.collabReq||[]).includes(id)?"pending":"declined";
 const cbScope=x=>inScope(x.campus||uid(x.user).campus)||(x.collab||[]).some(c=>inScope(uid(c).campus)),cbFollow=x=>S.follows.has(x.user)||(x.collab||[]).some(c=>c===0||S.follows.has(c));
@@ -509,6 +519,7 @@ function register(){const r=S.reg,d=r.data,st=r.step;
   ${m.status==="verification_pending"&&!BE().submitVerification?`<button class="btn ghost" style="margin-top:12px" data-act="toReview">Simulate: roster check finished, send to review</button>`:""}
   ${m.status==="under_review"&&!BE().submitVerification?`<button class="btn" style="margin-top:12px" data-act="simApprove">Simulate admin approval</button><button class="btn danger" style="margin-top:8px" data-act="simReject">Simulate rejection</button>`:""}
   ${m.status==="rejected"?`<button class="btn" style="margin-top:12px" data-act="reapply">Correct details & request review</button>`:""}
+  ${BE().myStatus&&m.status!=="verified"?`<button class="btn" style="margin-top:12px" data-act="checkStatus">Check status</button>`:""}
   <button class="btn ghost" style="margin-top:12px" data-act="logout">Sign out</button>`}
  return `<div class="shell"><div class="auth"><button data-act="${st>1&&st<4?"regBack":"goLanding"}" class="row muted">${ic("back")} Back</button>${bar}${body}</div></div>`}
 
@@ -965,8 +976,8 @@ const A={
  bApprove(id){const r=S.badgeReqs.find(x=>x.id==id);r.status="approved";setBadge(r,true);notifyBadge(r,true);audit("Granted verified badge: "+r.name);render()},
  bReject(id){const r=S.badgeReqs.find(x=>x.id==id);r.status="rejected";r.note="We could not verify the details provided";notifyBadge(r,false);audit("Declined badge request: "+r.name);render()},
  bRevoke(id){const r=S.badgeReqs.find(x=>x.id==id);r.status="rejected";r.note="Badge removed by an admin";setBadge(r,false);notifyBadge(r,false);audit("Revoked verified badge: "+r.name);render()},
- uBadge(id){const u=U.find(x=>x.id==id);u.badge=!u.badge;audit((u.badge?"Granted":"Revoked")+" verified badge: "+u.name);render()},
- vApproveBadge(id){const v=S.verifQ.find(x=>x.id==id);v.status="approved";const un=v.email.split("@")[0];S.badged.add(un);let r=S.badgeReqs.find(x=>!x.uid&&x.un===un&&x.status==="pending");if(r)r.status="approved";else S.badgeReqs.unshift({id:Date.now(),name:v.name,un,uid:null,cat:"Granted at verification",reason:"Approved by admin during student verification",link:"",status:"approved",note:""});audit("Approved verification + badge: "+v.name);render()},
+ uBadge(id){const u=U.find(x=>x.id==id);if(u.uuid&&BE().adminSetBadge){const on=!u.badge;BE().adminSetBadge(u.uuid,on).then(()=>{u.badge=on;audit((on?"Granted":"Revoked")+" verified badge: "+u.name);render()}).catch(e=>toast((e&&e.message)||"Could not update the badge"));return}u.badge=!u.badge;audit((u.badge?"Granted":"Revoked")+" verified badge: "+u.name);render()},
+ vApproveBadge(id){const v=S.verifQ.find(x=>x.id==id);if(v.dbId&&BE().adminReview){BE().adminReview(v.dbId,true).then(()=>BE().adminSetBadge(v.uid,true)).then(()=>{audit("Approved verification + badge: "+v.name);toast("Approved "+v.name+" with badge");loadAdminData()}).catch(e=>toast((e&&e.message)||"Could not approve"));return}v.status="approved";const un=v.email.split("@")[0];S.badged.add(un);let r=S.badgeReqs.find(x=>!x.uid&&x.un===un&&x.status==="pending");if(r)r.status="approved";else S.badgeReqs.unshift({id:Date.now(),name:v.name,un,uid:null,cat:"Granted at verification",reason:"Approved by admin during student verification",link:"",status:"approved",note:""});audit("Approved verification + badge: "+v.name);render()},
  newChat(){S.overlay={t:"newMenu"};render()},newDM(){S.overlay={t:"newChat"};render()},
  browseGroups(){S.overlay=null;S.tab="messages";S.msgTab="groups";S.chat=null;S.groupView=null;render()},
  newGroup(id){S.overlay={t:"newGroup",kind:id==="community"?"community":"group"};render()},
@@ -1070,10 +1081,11 @@ const A={
  unfollowFrom(id){S.follows.delete(+id);S.overlay=null;toast("Unfollowed");render()},
  noteEdit(){S.overlay={t:"noteEdit"};render()},noteDel(){S.myNote=null;S.overlay=null;toast("Note deleted");render()},
  storyDel(){clearTimeout(storyT);const g=S.stories[S.storyIdx];g.items.splice(S.storyItem,1);if(!g.items.length){S.stories.splice(S.storyIdx,1);S.overlay=null}else if(S.storyItem>=g.items.length)S.storyItem=g.items.length-1;toast("Story deleted");render()},
- openAdmin(){S.admin=true;S.adminTab="overview";render()},closeAdmin(){S.admin=false;render()},adminTab(id){S.adminTab=id;S.adminCampus=null;S.adminQ="";render()},adminCampus(id){S.adminCampus=id||null;S.adminQ="";render()},
- vApprove(id){const v=S.verifQ.find(x=>x.id==id);v.status="approved";audit("Approved verification: "+v.name);render()},
- vReject(id){const v=S.verifQ.find(x=>x.id==id);v.status="rejected";audit("Rejected verification: "+v.name);render()},
- suspend(id){const u=U.find(x=>x.id==id);u.suspended=!u.suspended;audit((u.suspended?"Suspended ":"Reinstated ")+u.name);render()},
+ openAdmin(){S.admin=true;S.adminTab="overview";render()},closeAdmin(){S.admin=false;render()},checkStatus(){BE().myStatus().then(res=>{const u=res.user||{};Object.assign(S.me,u);if(u.status==="verified"){toast("You are verified. Welcome to GITAMGRAM!");loadRemoteFeed();enterApp()}else{toast(u.status==="rejected"?"Your verification was declined.":"Still waiting for approval. Check back soon.");render()}}).catch(e=>toast((e&&e.message)||"Could not check your status"))},
+  adminTab(id){S.adminTab=id;S.adminCampus=null;S.adminQ="";if(id==="users"||id==="campuses"||id==="overview")loadAdminData();render()},adminCampus(id){S.adminCampus=id||null;S.adminQ="";render()},
+ vApprove(id){const v=S.verifQ.find(x=>x.id==id);if(v.dbId&&BE().adminReview){BE().adminReview(v.dbId,true).then(()=>{audit("Approved verification: "+v.name);toast("Approved "+v.name);loadAdminData()}).catch(e=>toast((e&&e.message)||"Could not approve"));return}v.status="approved";audit("Approved verification: "+v.name);render()},
+ vReject(id){const v=S.verifQ.find(x=>x.id==id);if(v.dbId&&BE().adminReview){BE().adminReview(v.dbId,false).then(()=>{audit("Rejected verification: "+v.name);toast("Rejected "+v.name);loadAdminData()}).catch(e=>toast((e&&e.message)||"Could not reject"));return}v.status="rejected";audit("Rejected verification: "+v.name);render()},
+ suspend(id){const u=U.find(x=>x.id==id);if(u.uuid&&BE().adminSetSuspended){const on=!u.suspended;BE().adminSetSuspended(u.uuid,on).then(()=>{u.suspended=on;audit((on?"Suspended ":"Reinstated ")+u.name);render()}).catch(e=>toast((e&&e.message)||"Could not update the account"));return}u.suspended=!u.suspended;audit((u.suspended?"Suspended ":"Reinstated ")+u.name);render()},
  clubOk(id){const c=S.clubApprovals.find(x=>x.id==id);c.status="approved";if(!CLUBS.some(x=>x.name===c.name&&x.campus===c.campus))CLUBS.push({id:Date.now()%1e7+100,slug:c.name.toLowerCase().replace(/\W+/g,"-"),type:"public",name:c.name,campus:c.campus,cat:"Student club",members:1,official:false,about:"Newly approved club. An admin will be assigned soon.",followers:[]});audit("Approved club: "+c.name);render()},clubNo(id){const c=S.clubApprovals.find(x=>x.id==id);c.status="rejected";audit("Rejected club: "+c.name);render()},
  rRemove(id){const r=S.reports.find(x=>x.id==id);r.status="removed";if(r.cref)S.confessions=S.confessions.filter(c=>c.id!==r.cref);audit("Removed content: "+r.target);render()},rDismiss(id){const r=S.reports.find(x=>x.id==id);r.status="dismissed";audit("Dismissed report: "+r.target);render()},
  cPublish(id){const c=S.pendingConf.find(x=>x.id==id);c.status="published";S.confessions.unshift({id:c.id,t:c.t,hearts:0,hug:0,status:"published",reported:false,campus:c.campus||"hyd"});audit("Published confession #"+c.id);render()},
@@ -1108,7 +1120,7 @@ document.addEventListener("submit",e=>{
  if(k==="login"){const em=(d.email||"").trim().toLowerCase();if(!LOGIN_OK(em)){r.err="Use your GITAM university email (@gitam.edu or @gitam.in).";return render()}
   if(!BE().login){r.err="Sign-in is not available: the server is not connected.";return render()}
   BE().login(em,d.pw).then(res=>{if(res.needsPasswordSetup){S.pwErr="";S.setupEm=em;S.overlay={t:"pwSetup"};r.err="";return render()}const u=res.user||{},role=res.role||"student",adm=role==="admin"||role==="super_admin";
-   loadRemoteFeed();
+   loadRemoteFeed();if(adm)loadAdminData();
    if(res.mustChangePassword){S.pwErr="";S.overlay={t:"pwChange",forced:true}}
    if(adm){Object.assign(S.me,{id:0,name:OFFICIAL.name,un:OFFICIAL.un,email:em,verified:true,badge:true,status:"verified",role,isOfficial:true,photo:OFFICIAL.photo,bio:OFFICIAL.bio,link:OFFICIAL.link,note:"",dept:"Official",year:"Platform account",campus:"all"},u);S.scope="all";S.campusSel="all";S.admin=true;S.adminTab="overview";S.screen="app";r.err="";return render()}
    Object.assign(S.me,{id:0,name:em.split("@")[0].replace(/[._]/g," ").replace(/\b\w/g,c=>c.toUpperCase()),un:em.split("@")[0],email:em,isOfficial:false,photo:null,note:"",link:"",bio:"",verified:true,status:"verified",role:"student"},u);r.err="";const stt=S.me.status||"verified";if(stt!=="verified"){S.screen="register";S.reg={step:stt==="email_pending"?3:4,data:{name:S.me.name,email:em,campus:S.me.campus||"hyd"},err:""};return render()}enterApp()}).catch(e=>{if(e&&e.code==="NEEDS_PASSWORD_SETUP"){S.pwErr="";S.setupEm=em;S.overlay={t:"pwSetup"};r.err="";return render()}r.err=(e&&e.message)||"Incorrect email or password.";render()});return}
